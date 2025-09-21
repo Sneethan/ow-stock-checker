@@ -621,7 +621,7 @@ class CheckCompetitorsButton(discord.ui.Button):
             try:
                 # Perform price comparison
                 comparisons = await price_comparison.search_all_retailers(
-                    self.product_name, self.officeworks_price, max_retailers=4
+                    self.product_name, self.officeworks_price, max_retailers=3
                 )
                 
                 if comparisons:

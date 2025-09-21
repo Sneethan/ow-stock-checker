@@ -5,7 +5,7 @@ The price comparison feature is now integrated into your Officeworks Stock Check
 ## Current Status
 
 ✅ **Implemented Features:**
-- Price comparison system with 6 major retailers (JB Hi-Fi, Harvey Norman, Amazon AU, Big W, Kmart, Officeworks)
+- Price comparison system with 4 major retailers (JB Hi-Fi, Harvey Norman, The Good Guys, Officeworks)
 - Enhanced `/check` command with `compare_prices` parameter
 - New standalone `/compare` command for any product search
 - Intelligent product matching and price analysis
@@ -75,7 +75,7 @@ After configuring Firecrawl, test the functionality:
 
 With Firecrawl properly configured, you should see:
 
-1. **Real Price Data**: Actual prices from JB Hi-Fi, Harvey Norman, Amazon AU, etc.
+1. **Real Price Data**: Actual prices from JB Hi-Fi, Harvey Norman, The Good Guys, etc.
 2. **Price Match Opportunities**: Clear indicators when competitors have lower prices
 3. **Detailed Product Information**: Better product matching and descriptions
 4. **Up-to-date Pricing**: Current prices from retailer websites
