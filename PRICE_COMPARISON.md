@@ -10,10 +10,10 @@ The price comparison system currently supports the following retailers:
 
 - **JB Hi-Fi** - Electronics and entertainment
 - **Harvey Norman** - Electronics and appliances  
-- **Amazon AU** - Wide range of products
+- **The Good Guys** - Appliances and electronics
 - **Officeworks** - Office supplies and electronics
 
-*Note: Big W and Kmart were removed due to prevalence of marketplace sellers affecting price accuracy.*
+*Note: Amazon AU, Big W and Kmart were removed due to marketplace seller listings affecting price accuracy and reliability.*
 
 ## How It Works
 
@@ -241,7 +241,7 @@ Found price comparisons for iPad Mini A17 Pro 8.3" WiFi 128GB Space Grey
 
 🏪 Officeworks: $899.00
 🔗 JB Hi-Fi: $849.00 📉 Save $50.00! ✅ Price match eligible!
-🔗 Amazon AU: $869.00 📉 Save $30.00! ✅ Price match eligible!
+🔗 The Good Guys: $869.00 📉 Save $30.00! ✅ Price match eligible!
 
 🎯 Price Match Opportunity
 Show JB Hi-Fi price ($849.00) to Officeworks for a potential price match!
@@ -259,8 +259,7 @@ Found prices for Sony WH-1000XM4 across retailers
 
 🔗 JB Hi-Fi: $348.00
 🔗 Harvey Norman: $399.00
-🔗 Amazon AU: $329.00
-🔗 Big W: $369.00
+🔗 The Good Guys: $329.00
 ```
 
 ## Troubleshooting

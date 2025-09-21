@@ -93,36 +93,6 @@ class PriceComparison:
                 ],
                 price_match_threshold=0.3
             ),
-            'amazon': RetailerConfig(
-                name="Amazon AU",
-                base_url="https://www.amazon.com.au",
-                search_url="https://www.amazon.com.au/s?k={query}&ref=nb_sb_noss",
-                price_selectors=[
-                    '.a-price-whole',
-                    '.a-price .a-offscreen',
-                    '.a-price-symbol + .a-price-whole',
-                    '.price .a-price-whole',
-                    '.a-price-amount .a-offscreen',
-                    '.sx-price .a-offscreen',
-                    '.a-row .a-price .a-offscreen'
-                ],
-                title_selectors=[
-                    '[data-cy="title-recipe"]',
-                    '.a-size-medium.a-color-base',
-                    '.s-size-mini .a-color-base',
-                    'h2 .a-link-normal .a-text-normal',
-                    '.s-link-style .a-text-normal',
-                    'h3.s-size-mini span',
-                    '.a-text-normal.a-color-base.a-size-base-plus'
-                ],
-                link_selectors=[
-                    '[data-cy="title-recipe"] a',
-                    '.s-product-image-container a',
-                    '.a-link-normal',
-                    '.s-link-style'
-                ],
-                price_match_threshold=0.3
-            ),
             'good_guys': RetailerConfig(
                 name="The Good Guys",
                 base_url="https://www.thegoodguys.com.au",
@@ -177,8 +147,8 @@ class PriceComparison:
             )
         }
     
-    async def search_all_retailers(self, product_name: str, officeworks_price: float, 
-                                 max_retailers: int = 4) -> List[Dict]:
+    async def search_all_retailers(self, product_name: str, officeworks_price: float,
+                                 max_retailers: int = 3) -> List[Dict]:
         """Search all configured retailers for price comparisons"""
         if not self.firecrawl_client:
             return []
@@ -341,14 +311,8 @@ class PriceComparison:
             }
             
             # Create a specific prompt for this retailer and query
-            if retailer.name == "Amazon AU":
-                prompt = f"""Extract product information from this Amazon Australia search results page for "{query}". 
-                Focus on genuine Apple products or exact product matches, ignore cases, accessories, and third-party items unless specifically relevant.
-                Look for products with prices in AUD ($). Extract the product name, price (as a number without currency symbols), product URL, availability status, brand, and model.
-                Ignore "Renewed" products unless specifically searching for them.
-                Return up to 8 most relevant products."""
-            elif retailer.name == "Harvey Norman":
-                prompt = f"""Extract product information from this Harvey Norman search results page for "{query}". 
+            if retailer.name == "Harvey Norman":
+                prompt = f"""Extract product information from this Harvey Norman search results page for "{query}".
                 Focus on main product listings, ignore accessories unless specifically relevant.
                 Look for products with clear pricing. Extract the product name, price (as a number without currency symbols), product URL, availability status, brand, and model.
                 Return up to 10 most relevant products."""
@@ -875,7 +839,7 @@ class PriceComparison:
         # Common tech brands
         brands = [
             'tp-link', 'tplink', 'apple', 'samsung', 'sony', 'lg', 'hp', 'dell', 'lenovo',
-            'asus', 'acer', 'microsoft', 'google', 'amazon', 'netgear', 'linksys',
+            'asus', 'acer', 'microsoft', 'google', 'netgear', 'linksys',
             'cisco', 'nvidia', 'intel', 'amd', 'logitech', 'razer', 'corsair', 'belkin'
         ]
         
