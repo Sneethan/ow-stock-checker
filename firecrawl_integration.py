@@ -1,7 +1,8 @@
 import asyncio
+import inspect
 import json
 import os
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 from datetime import datetime
 
 class FirecrawlIntegration:
@@ -11,7 +12,32 @@ class FirecrawlIntegration:
         self.rate_limit_delay = 2  # Delay between requests to avoid rate limiting
         self.last_request_time = None
         self.firecrawl_app = None
+        self.default_request_options = self._build_default_request_options()
         self._initialize_firecrawl()
+
+    def _build_default_request_options(self) -> Dict:
+        """Return Firecrawl options recommended for reliable, live scraping."""
+        # Firecrawl's documentation highlights these options for forcing live
+        # scrapes and improving success rates on dynamic retail pages. We make
+        # them available in several naming conventions so the SDK can accept
+        # whichever variant it expects without failing the request.
+        page_options = {
+            "maxAge": 0,
+            "timeout": 60000,
+            "waitFor": 3000,
+            "onlyMainContent": False,
+        }
+
+        return {
+            "pageOptions": page_options,
+            # Duplicate the most important options at the top level in case the
+            # SDK expects snake_case argument names instead of nested objects.
+            "maxAge": page_options["maxAge"],
+            "timeout": page_options["timeout"],
+            "waitFor": page_options["waitFor"],
+            "onlyMainContent": page_options["onlyMainContent"],
+            "proxy": "auto",
+        }
     
     def _initialize_firecrawl(self):
         """Initialize the Firecrawl client"""
@@ -73,6 +99,91 @@ class FirecrawlIntegration:
                 await asyncio.sleep(self.rate_limit_delay - elapsed)
         self.last_request_time = datetime.now()
     
+    def _filter_kwargs_for_signature(self, method, base_kwargs: Dict[str, object]) -> Dict[str, object]:
+        """Return kwargs supported by the Firecrawl method signature."""
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return base_kwargs
+
+        filtered_kwargs = {}
+        for key, value in base_kwargs.items():
+            if key in signature.parameters:
+                filtered_kwargs[key] = value
+        return filtered_kwargs
+
+    def _build_option_kwargs(self, method) -> Dict[str, object]:
+        """Build option kwargs supported by the Firecrawl method."""
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return {}
+
+        option_kwargs: Dict[str, object] = {}
+        params = signature.parameters
+        page_options = self.default_request_options.get("pageOptions", {})
+
+        # Firecrawl python client has historically exposed several different
+        # argument names, so we proactively support the common variants.
+        if "options" in params:
+            option_kwargs["options"] = self.default_request_options
+        if "page_options" in params:
+            option_kwargs["page_options"] = page_options
+        if "pageOptions" in params:
+            option_kwargs["pageOptions"] = page_options
+        if "max_age" in params:
+            option_kwargs["max_age"] = page_options.get("maxAge")
+        if "maxAge" in params:
+            option_kwargs["maxAge"] = page_options.get("maxAge")
+        if "timeout" in params:
+            option_kwargs["timeout"] = page_options.get("timeout")
+        if "wait_for" in params:
+            option_kwargs["wait_for"] = page_options.get("waitFor")
+        if "waitFor" in params:
+            option_kwargs["waitFor"] = page_options.get("waitFor")
+        if "only_main_content" in params:
+            option_kwargs["only_main_content"] = page_options.get("onlyMainContent")
+        if "onlyMainContent" in params:
+            option_kwargs["onlyMainContent"] = page_options.get("onlyMainContent")
+        if "proxy" in params:
+            option_kwargs["proxy"] = self.default_request_options.get("proxy")
+
+        return option_kwargs
+
+    def _call_firecrawl_method(self, method_names: List[str], base_kwargs: Dict[str, object]) -> Tuple[Optional[object], Optional[str]]:
+        """Attempt to call one of the provided Firecrawl methods with fallbacks."""
+        if not self.firecrawl_app:
+            return None, None
+
+        last_error: Optional[Exception] = None
+
+        for method_name in method_names:
+            method = getattr(self.firecrawl_app, method_name, None)
+            if not method:
+                continue
+
+            prepared_kwargs = self._filter_kwargs_for_signature(method, base_kwargs)
+            option_kwargs = self._build_option_kwargs(method)
+
+            try:
+                return method(**{**prepared_kwargs, **option_kwargs}), method_name
+            except TypeError as type_error:
+                # Retry without extra options; some SDK releases do not accept
+                # them even if the signature appears to allow arbitrary kwargs.
+                try:
+                    return method(**prepared_kwargs), method_name
+                except Exception as secondary_error:  # pragma: no cover - logged below
+                    last_error = secondary_error
+                    print(f"[Firecrawl] {method_name} failed after retry: {secondary_error}")
+            except Exception as error:  # pragma: no cover - logged below
+                last_error = error
+                print(f"[Firecrawl] {method_name} raised {error}")
+
+        if last_error:
+            raise last_error
+
+        return None, None
+
     async def extract_products(self, url: str, prompt: str = None, schema: Dict = None) -> Optional[Dict]:
         """
         Use Firecrawl's Extract feature to get structured product data
@@ -108,48 +219,29 @@ class FirecrawlIntegration:
                 print(f"[Firecrawl Extract] Calling extract with url={url}, prompt={prompt is not None}, schema={schema is not None}")
                 
                 # Check if the extract method exists
-                if not hasattr(self.firecrawl_app, 'extract'):
-                    print(f"[Firecrawl Extract] Error: extract method not found on FirecrawlApp")
+                base_kwargs = {
+                    'urls': [url],
+                    'url': url,
+                }
+
+                if schema:
+                    print(f"[Firecrawl Extract] Using schema-based extraction")
+                    base_kwargs['schema'] = schema
+                elif prompt:
+                    print(f"[Firecrawl Extract] Using prompt-based extraction")
+                    base_kwargs['prompt'] = prompt
+
+                result, method_used = self._call_firecrawl_method(['extract'], base_kwargs)
+
+                if method_used:
+                    print(f"[Firecrawl Extract] Called method '{method_used}' with enhanced options")
+                else:
+                    print(f"[Firecrawl Extract] No extract method available on FirecrawlApp")
                     return {
                         'success': False,
                         'error': 'Extract method not found on FirecrawlApp',
                         'url': url
                     }
-                
-                if schema:
-                    # Use schema-based extraction
-                    print(f"[Firecrawl Extract] Using schema-based extraction")
-                    try:
-                        result = self.firecrawl_app.extract(urls=[url], schema=schema)
-                    except Exception as e:
-                        print(f"[Firecrawl Extract] Schema extraction failed: {e}")
-                        # Try alternative parameter names
-                        try:
-                            result = self.firecrawl_app.extract(url=url, schema=schema)
-                        except Exception as e2:
-                            print(f"[Firecrawl Extract] Alternative schema extraction also failed: {e2}")
-                            return {
-                                'success': False,
-                                'error': f'Schema extraction failed: {e}',
-                                'url': url
-                            }
-                else:
-                    # Use prompt-based extraction
-                    print(f"[Firecrawl Extract] Using prompt-based extraction")
-                    try:
-                        result = self.firecrawl_app.extract(urls=[url], prompt=prompt)
-                    except Exception as e:
-                        print(f"[Firecrawl Extract] Prompt extraction failed: {e}")
-                        # Try alternative parameter names
-                        try:
-                            result = self.firecrawl_app.extract(url=url, prompt=prompt)
-                        except Exception as e2:
-                            print(f"[Firecrawl Extract] Alternative prompt extraction also failed: {e2}")
-                            return {
-                                'success': False,
-                                'error': f'Prompt extraction failed: {e}',
-                                'url': url
-                            }
                 
                 print(f"[Firecrawl Extract] Extract result: {result}")
                 
@@ -206,52 +298,26 @@ class FirecrawlIntegration:
                 }
             
             print(f"[Firecrawl] Scraping URL: {url}")
-            
-            # Use the Firecrawl Python SDK
+
+            # Use the Firecrawl Python SDK with the resilient option handling
             try:
-                # Try to use the scrape method - this might be the correct method name
-                # The Firecrawl Python SDK might use 'scrape' instead of 'scrape_url'
-                if hasattr(self.firecrawl_app, 'scrape'):
-                    print(f"[Firecrawl] Using scrape method")
-                    try:
-                        result = self.firecrawl_app.scrape(url)
-                    except Exception as e:
-                        print(f"[Firecrawl] Scrape method failed: {e}")
-                        # Try alternative parameter names
-                        try:
-                            result = self.firecrawl_app.scrape(urls=[url])
-                        except Exception as e2:
-                            print(f"[Firecrawl] Alternative scrape method also failed: {e2}")
-                            return {
-                                'success': False,
-                                'error': f'Scrape method failed: {e}',
-                                'url': url
-                            }
-                elif hasattr(self.firecrawl_app, 'scrape_url'):
-                    print(f"[Firecrawl] Using scrape_url method")
-                    try:
-                        result = self.firecrawl_app.scrape_url(url)
-                    except Exception as e:
-                        print(f"[Firecrawl] Scrape_url method failed: {e}")
-                        # Try alternative parameter names
-                        try:
-                            result = self.firecrawl_app.scrape_url(urls=[url])
-                        except Exception as e2:
-                            print(f"[Firecrawl] Alternative scrape_url method also failed: {e2}")
-                            return {
-                                'success': False,
-                                'error': f'Scrape_url method failed: {e}',
-                                'url': url
-                            }
-                else:
-                    # Fallback: try to find the correct method
+                base_kwargs = {
+                    'url': url,
+                    'urls': [url],
+                }
+
+                result, method_used = self._call_firecrawl_method(['scrape', 'scrape_url'], base_kwargs)
+
+                if not method_used:
                     print(f"[Firecrawl] Warning: Could not find scrape method on FirecrawlApp")
                     return {
                         'success': False,
                         'error': 'Scrape method not found on FirecrawlApp',
                         'url': url
                     }
-                
+
+                print(f"[Firecrawl] Using {method_used} with enhanced options")
+
                 # Handle the response object properly
                 if hasattr(result, 'success') and result.success:
                     print(f"[Firecrawl] Successfully scraped {url}")

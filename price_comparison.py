@@ -1,9 +1,9 @@
 import asyncio
 import re
+from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 import discord
-from config import get_full_timestamp
 from colors import *
 from emojis import *
 
@@ -30,7 +30,7 @@ class PriceComparison:
     def _setup_retailers(self) -> Dict[str, RetailerConfig]:
         """Setup configuration for different retailers"""
         return {
-                            'jb_hifi': RetailerConfig(
+            'jb_hifi': RetailerConfig(
                 name="JB Hi-Fi",
                 base_url="https://www.jbhifi.com.au",
                 search_url="https://www.jbhifi.com.au/search?query={query}",
@@ -39,19 +39,26 @@ class PriceComparison:
                     '.price .price-value',
                     '.pricing .current-price',
                     '.price-now',
-                    '[data-testid="price"]'
+                    '[data-testid="price"]',
+                    '.ProductPrice__price',
+                    '.ProductPrice__price span',
+                    '.ProductTile__Price',
+                    '[data-component="ProductPrice"]'
                 ],
                 title_selectors=[
                     '.product-title',
-                    '.product-name', 
+                    '.product-name',
                     'h1.title',
                     '.product-heading',
-                    '[data-testid="product-title"]'
+                    '[data-testid="product-title"]',
+                    '.ProductTile__Title',
+                    '[data-component="ProductName"]'
                 ],
                 link_selectors=[
                     '.product-item a',
                     '.product-card a',
-                    '.product-link'
+                    '.product-link',
+                    '.ProductTile__Body a'
                 ],
                 price_match_threshold=0.3  # Lower threshold for better matching
             ),
@@ -66,7 +73,9 @@ class PriceComparison:
                     '.pricing-price',
                     '.price-display',
                     '.special-price .price',
-                    '.regular-price .price'
+                    '.regular-price .price',
+                    '.price-box .price',
+                    '.price-container span.price'
                 ],
                 title_selectors=[
                     '.product-title',
@@ -74,7 +83,8 @@ class PriceComparison:
                     'h1.heading',
                     '.product-heading',
                     '.product-item-name',
-                    'h2.product-name'
+                    'h2.product-name',
+                    '.product-item-link'
                 ],
                 link_selectors=[
                     '.product-tile a',
@@ -93,7 +103,8 @@ class PriceComparison:
                     '.a-price-symbol + .a-price-whole',
                     '.price .a-price-whole',
                     '.a-price-amount .a-offscreen',
-                    '.sx-price .a-offscreen'
+                    '.sx-price .a-offscreen',
+                    '.a-row .a-price .a-offscreen'
                 ],
                 title_selectors=[
                     '[data-cy="title-recipe"]',
@@ -101,7 +112,8 @@ class PriceComparison:
                     '.s-size-mini .a-color-base',
                     'h2 .a-link-normal .a-text-normal',
                     '.s-link-style .a-text-normal',
-                    'h3.s-size-mini span'
+                    'h3.s-size-mini span',
+                    '.a-text-normal.a-color-base.a-size-base-plus'
                 ],
                 link_selectors=[
                     '[data-cy="title-recipe"] a',
@@ -121,7 +133,9 @@ class PriceComparison:
                     '.current-price',
                     '.sale-price',
                     '.price-current',
-                    '.pricing .price'
+                    '.pricing .price',
+                    '.pricing .price-now',
+                    '.ProductPrice span'
                 ],
                 title_selectors=[
                     '.product-title',
@@ -129,13 +143,15 @@ class PriceComparison:
                     'h3.product-title',
                     'h4.product-title',
                     '.product-item-name',
-                    '.title'
+                    '.title',
+                    '.ProductName'
                 ],
                 link_selectors=[
                     '.product-tile a',
                     '.product-item a',
                     '.product-link',
-                    'a.product-title'
+                    'a.product-title',
+                    '.ProductCard a'
                 ],
                 price_match_threshold=0.3
             ),
@@ -425,11 +441,13 @@ class PriceComparison:
                 html_products = self._extract_from_html(html_content, retailer)
                 products.extend(html_products)
                 print(f"[Debug] {retailer.name}: Extracted {len(html_products)} products from HTML")
-                
+
         except Exception as e:
             print(f"Error extracting products: {e}")
-        
-        return products
+
+        deduplicated = self._deduplicate_products(products)
+        print(f"[Debug] {retailer.name}: {len(deduplicated)} products after deduplication")
+        return deduplicated
     
     def _extract_from_markdown(self, markdown: str, retailer: RetailerConfig) -> List[Dict]:
         """Extract products from markdown content"""
@@ -596,159 +614,258 @@ class PriceComparison:
         return False
     
     def _extract_from_html(self, html: str, retailer: RetailerConfig) -> List[Dict]:
-        """Extract products from HTML content using regex patterns"""
-        products = []
-        
+        """Extract products from HTML content using retailer specific selectors."""
+        products: List[Dict] = []
+
         try:
-            # Simple HTML parsing using regex (not ideal but functional)
-            # Look for price patterns
             price_patterns = [
-                r'class="[^"]*price[^"]*"[^>]*>\s*\$?(\d+(?:\.\d{2})?)',
-                r'data-price="(\d+(?:\.\d{2})?)"',
-                r'\$(\d+(?:\.\d{2})?)'
+                r'class="[^"]*price[^"]*"[^>]*>\s*\$?([\d,.]+)',
+                r'data-price="([\d,.]+)"',
+                r'\$\s*([\d,.]+)'
             ]
-            
-            # Look for title patterns
+            price_patterns.extend(self._selectors_to_regex(retailer.price_selectors, capture='price'))
+
             title_patterns = [
                 r'<h[1-6][^>]*>([^<]+)</h[1-6]>',
                 r'class="[^"]*title[^"]*"[^>]*>([^<]+)<',
                 r'class="[^"]*name[^"]*"[^>]*>([^<]+)<'
             ]
-            
-            # Find all prices
-            all_prices = []
+            title_patterns.extend(self._selectors_to_regex(retailer.title_selectors, capture='text'))
+
+            link_patterns = self._selectors_to_regex(retailer.link_selectors, capture='link')
+
+            all_prices: List[float] = []
             for pattern in price_patterns:
                 prices = re.findall(pattern, html, re.IGNORECASE)
                 for price_str in prices:
-                    try:
-                        price = float(price_str)
-                        if 1 <= price <= 10000:
-                            all_prices.append(price)
-                    except ValueError:
-                        continue
-            
-            # Find all titles
-            all_titles = []
+                    parsed_price = self._parse_price(price_str)
+                    if 1 <= parsed_price <= 10000:
+                        all_prices.append(parsed_price)
+
+            all_titles: List[str] = []
             for pattern in title_patterns:
                 titles = re.findall(pattern, html, re.IGNORECASE)
                 for title in titles:
                     clean_title = re.sub(r'<[^>]+>', '', title).strip()
                     if clean_title and len(clean_title) > 5:
                         all_titles.append(clean_title)
-            
-            # Combine prices and titles (simple pairing)
+
+            all_links: List[str] = []
+            for pattern in link_patterns:
+                links = re.findall(pattern, html, re.IGNORECASE)
+                for link in links:
+                    if isinstance(link, tuple):
+                        link = link[-1]
+                    link = link.strip()
+                    if link:
+                        all_links.append(self._build_absolute_url(link, retailer.base_url))
+
             min_items = min(len(all_prices), len(all_titles))
-            for i in range(min_items):
+            for index in range(min_items):
+                url = all_links[index] if index < len(all_links) else retailer.base_url
                 products.append({
-                    'title': all_titles[i],
-                    'price': all_prices[i],
-                    'url': retailer.base_url
+                    'title': all_titles[index],
+                    'price': all_prices[index],
+                    'url': url
                 })
-                
+
         except Exception as e:
             print(f"Error parsing HTML: {e}")
-        
-        return products[:5]  # Limit to first 5 products
+
+        return products[:5]
+
+    def _selectors_to_regex(self, selectors: List[str], capture: str) -> List[str]:
+        """Convert CSS-like selectors into lightweight regex patterns."""
+        patterns: List[str] = []
+
+        for selector in selectors or []:
+            selector = selector.strip()
+            if not selector:
+                continue
+
+            if selector.startswith('[') and '=' in selector:
+                attr, _, remainder = selector[1:-1].partition('=')
+                attr = attr.strip()
+                cleaned = remainder.strip()
+                value = cleaned.strip('"').strip("'")
+                if capture == 'price':
+                    patterns.append(rf'{attr}\s*=\s*"{re.escape(value)}"[^>]*>[^$]*\$?([\d,.]+)')
+                elif capture == 'link':
+                    patterns.append(rf'{attr}\s*=\s*"{re.escape(value)}"[^>]*href="([^"]+)"')
+                else:
+                    patterns.append(rf'{attr}\s*=\s*"{re.escape(value)}"[^>]*>([^<]+)<')
+                continue
+
+            tag = '[^>]*'
+            class_name = ''
+            if '.' in selector:
+                parts = selector.split('.')
+                if parts[0]:
+                    tag = parts[0]
+                class_name = parts[-1]
+            elif selector.startswith('.'):  # pure class selector
+                class_name = selector[1:]
+            else:
+                tag = selector
+
+            class_pattern = r''
+            if class_name:
+                class_pattern = rf'class="[^"]*{re.escape(class_name)}[^"]*"'
+
+            if capture == 'price':
+                patterns.append(rf'<{tag}[^>]*{class_pattern}[^>]*>[^$]*\$?([\d,.]+)')
+            elif capture == 'link':
+                patterns.append(rf'<{tag}[^>]*{class_pattern}[^>]*href="([^"]+)"')
+            else:
+                patterns.append(rf'<{tag}[^>]*{class_pattern}[^>]*>([^<]+)<')
+
+        return patterns
+
+    def _build_absolute_url(self, candidate_url: str, base_url: str) -> str:
+        """Ensure URLs are absolute for downstream Discord embeds."""
+        if candidate_url.startswith('http'):
+            return candidate_url
+        if candidate_url.startswith('//'):
+            return f'https:{candidate_url}'
+        if candidate_url.startswith('/'):
+            return f"{base_url.rstrip('/')}{candidate_url}"
+        return f"{base_url.rstrip('/')}/{candidate_url.lstrip('/')}"
+
+    def _deduplicate_products(self, products: List[Dict]) -> List[Dict]:
+        """Remove duplicate listings based on normalized title and price."""
+        seen = set()
+        deduped: List[Dict] = []
+
+        for product in products:
+            title = product.get('title')
+            price = self._parse_price(product.get('price'))
+            if not title or price <= 0:
+                continue
+
+            normalized_title = self._normalize_text(title)
+            dedupe_key = (normalized_title, round(price, 2))
+
+            if dedupe_key in seen:
+                continue
+
+            seen.add(dedupe_key)
+            product['price'] = price
+            deduped.append(product)
+
+        return deduped
     
-    def _find_best_product_match(self, products: List[Dict], query: str, 
+    def _normalize_text(self, text: str) -> str:
+        if not text:
+            return ""
+        normalized = re.sub(r'[^a-z0-9]+', ' ', text.lower())
+        return ' '.join(normalized.split())
+
+    def _calculate_match_score(self, query_normalized: str, product: Dict,
+                               key_terms: List[str], query_words: set) -> float:
+        title = product.get('title', '')
+        normalized_title = self._normalize_text(title)
+        if not normalized_title:
+            return 0.0
+
+        title_words = set(normalized_title.split())
+        price = self._parse_price(product.get('price', 0))
+
+        score = 0.0
+
+        # Overall similarity between normalized strings
+        if query_normalized:
+            similarity_ratio = SequenceMatcher(None, query_normalized, normalized_title).ratio()
+            score += similarity_ratio * 0.35
+
+        # Key term coverage (brands, tech keywords, model numbers)
+        if key_terms:
+            matches = sum(1 for term in key_terms if term in normalized_title)
+            score += (matches / len(key_terms)) * 0.2
+
+        # Word overlap
+        if query_words:
+            overlap = len(query_words.intersection(title_words)) / len(query_words)
+            score += overlap * 0.25
+
+        # Partial matches for specs/model numbers
+        if query_words:
+            partial_matches = 0
+            for query_word in query_words:
+                if len(query_word) < 3:
+                    continue
+                for title_word in title_words:
+                    if query_word in title_word or title_word in query_word:
+                        partial_matches += 1
+                        break
+            score += (partial_matches / len(query_words)) * 0.1
+
+        # Number alignment (capacities, model numbers)
+        query_numbers = re.findall(r'\d+', query_normalized)
+        title_numbers = re.findall(r'\d+', normalized_title)
+        if query_numbers:
+            number_matches = len(set(query_numbers).intersection(set(title_numbers)))
+            score += (number_matches / len(query_numbers)) * 0.05
+
+        # Bonus for explicit brand/model metadata when provided
+        product_brand = self._normalize_text(product.get('brand', ''))
+        if product_brand and product_brand in query_normalized:
+            score += 0.03
+
+        product_model = self._normalize_text(product.get('model', ''))
+        if product_model and product_model in query_normalized:
+            score += 0.03
+
+        # Price sanity check to avoid zero-value matches
+        if 1 <= price <= 10000:
+            score += 0.02
+
+        # Reasonable title length tends to indicate a proper listing
+        title_length = len(title_words)
+        if 3 <= title_length <= 15:
+            score += 0.02
+
+        return min(score, 1.0)
+
+    def _find_best_product_match(self, products: List[Dict], query: str,
                                threshold: float) -> Optional[Dict]:
         """Find the best matching product from search results using fuzzy matching"""
         if not products:
             return None
-        
-        query_lower = query.lower()
-        query_words = set(query_lower.split())
-        
-        # Extract key terms for better matching
-        key_terms = self._extract_key_terms(query_lower)
-        
-        best_match = None
-        best_score = 0
-        
+
+        query_normalized = self._normalize_text(query)
+        query_words = set(query_normalized.split())
+        key_terms = self._extract_key_terms(query_normalized)
+
+        candidate_scores: List[Tuple[float, float, Dict]] = []
         for product in products:
-            title = product.get('title', '').lower()
-            title_words = set(title.split())
-            
-            score = 0
-            
-            # 1. Exact substring match (highest weight)
-            if query_lower in title:
-                score += 0.6
-            
-            # 2. Key terms matching (brand, model, key features)
-            key_term_matches = 0
-            for term in key_terms:
-                if term in title:
-                    key_term_matches += 1
-            if key_terms:
-                score += (key_term_matches / len(key_terms)) * 0.4
-            
-            # 3. Word overlap scoring
-            matching_words = query_words.intersection(title_words)
-            if query_words:
-                word_overlap_score = len(matching_words) / len(query_words)
-                score += word_overlap_score * 0.3
-            
-            # 4. Partial word matching (for model numbers, etc.)
-            partial_matches = 0
-            for query_word in query_words:
-                for title_word in title_words:
-                    if len(query_word) >= 3 and query_word in title_word:
-                        partial_matches += 1
-                        break
-                    elif len(title_word) >= 3 and title_word in query_word:
-                        partial_matches += 1
-                        break
-            if query_words:
-                score += (partial_matches / len(query_words)) * 0.2
-            
-            # 5. Length penalty for very short or very long titles
-            title_length = len(title.split())
-            if 3 <= title_length <= 15:  # Reasonable title length
-                score += 0.05
-            
-            # 6. Price reasonableness check
-            price = product.get('price', 0)
-            if 1 <= price <= 10000:
-                score += 0.05
-            
-            # 7. Bonus for containing numbers (model numbers, specs)
-            import re
-            query_numbers = re.findall(r'\d+', query_lower)
-            title_numbers = re.findall(r'\d+', title)
-            if query_numbers and title_numbers:
-                number_matches = len(set(query_numbers).intersection(set(title_numbers)))
-                score += (number_matches / len(query_numbers)) * 0.2
-            
-            # Update best match if this score is better and meets minimum threshold
-            if score > best_score and score >= (threshold * 0.7):  # Lower threshold for fuzzy matching
-                best_score = score
-                best_match = product
-        
-        # If no match found with normal threshold, try with very relaxed threshold
-        if not best_match and products:
-            for product in products:
-                title = product.get('title', '').lower()
-                
-                # Very basic matching - at least 2 words in common or partial brand match
-                common_words = set(query_lower.split()).intersection(set(title.split()))
-                if len(common_words) >= 2:
-                    best_match = product
-                    break
-                
-                # Check for brand/model partial matches
-                for query_word in query_lower.split():
-                    if len(query_word) >= 4:  # Longer words only
-                        for title_word in title.split():
-                            if query_word in title_word or title_word in query_word:
-                                best_match = product
-                                break
-                        if best_match:
-                            break
-                if best_match:
-                    break
-        
-        return best_match
+            price = self._parse_price(product.get('price'))
+            if price <= 0:
+                continue
+
+            product['price'] = price
+            score = self._calculate_match_score(query_normalized, product, key_terms, query_words)
+            if score <= 0:
+                continue
+
+            candidate_scores.append((score, price, product))
+
+        if not candidate_scores:
+            return None
+
+        # Prioritise the most similar product, break ties by lowest price.
+        candidate_scores.sort(key=lambda item: (-item[0], item[1]))
+
+        min_score = max(threshold, 0.2)
+        for score, _, product in candidate_scores:
+            if score >= min_score:
+                return product
+
+        # Fall back to a slightly more permissive threshold if nothing met the requirement
+        for score, _, product in candidate_scores:
+            if score >= 0.15:
+                return product
+
+        return candidate_scores[0][2] if candidate_scores else None
     
     def _extract_key_terms(self, query: str) -> List[str]:
         """Extract key terms (brands, model numbers, important features) from query"""
