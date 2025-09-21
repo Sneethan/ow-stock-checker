@@ -17,6 +17,33 @@ from price_checker import PriceChecker
 from price_comparison import price_comparison
 from firecrawl_integration import firecrawl_integration
 
+class StoreSetupError(Exception):
+    """Raised when a user's store preferences cannot be saved."""
+
+
+def _build_store_options(stores):
+    """Create Discord select options for the provided stores."""
+    options = []
+    for store in stores[:25]:
+        store_id = store.get('storeId')
+        if not store_id:
+            continue
+
+        suburb = store.get('suburb', '')
+        postcode = store.get('postcode', '')
+        suburb_postcode = f"{suburb}, {postcode}".strip(', ')
+        description = f"{suburb_postcode} - ID: {store_id}" if suburb_postcode else f"ID: {store_id}"
+
+        options.append(
+            discord.SelectOption(
+                label=store.get('store', 'Unknown Store'),
+                value=store_id,
+                description=description
+            )
+        )
+    return options
+
+
 class StateSelectionView(discord.ui.View):
     """View for selecting Australian state/territory"""
     
@@ -123,33 +150,22 @@ class AnyStoreButton(discord.ui.Button):
         """Complete the setup process"""
         user_id = interaction.user.id
         username = interaction.user.display_name
-        
-        if self.bot.database.add_user(user_id, username):
-            if self.bot.database.update_user_store(user_id, state, store_id):
-                embed = discord.Embed(
-                    title=f"{SUCCESS} Setup Complete!",
-                    description="Your Officeworks store preferences have been saved.",
-                    color=SUCCESS_COLOR
-                )
-                
-                embed.add_field(name="State", value=STATE_NAMES.get(state, state), inline=True)
-                embed.add_field(name="Store", value=f"Any store in {STATE_NAMES.get(state, state)}", inline=True)
-                embed.add_field(name="Status", value="Ready to track products!", inline=False)
-                embed.add_field(name="Completed", value=get_full_timestamp(datetime.now(timezone.utc)), inline=False)
-                
-                embed.set_footer(text="Use /add to start tracking products")
-                
-                await interaction.response.edit_message(content=None, embed=embed, view=None)
-            else:
-                await interaction.response.edit_message(
-                    content=f"{ERROR} Failed to save store preferences. Please try again.",
-                    view=None
-                )
-        else:
+
+        try:
+            embed = self.bot.complete_store_setup(
+                user_id,
+                username,
+                state,
+                store_id=store_id
+            )
+        except StoreSetupError as exc:
             await interaction.response.edit_message(
-                content=f"{ERROR} Failed to create user profile. Please try again.",
+                content=f"{ERROR} {exc}",
                 view=None
             )
+            return
+
+        await interaction.response.edit_message(content=None, embed=embed, view=None)
 
 class BrowseStoresButton(discord.ui.Button):
     """Button to browse available stores"""
@@ -243,32 +259,38 @@ class StoreSelect(discord.ui.Select):
         self.bot = bot
         self.state = state
         
-        # Create options for stores (limit to 25 for Discord)
-        options = []
-        for store in stores[:25]:
-            store_name = store['store']
-            store_address = f"{store['suburb']}, {store['postcode']}"
-            options.append(
+        options = _build_store_options(stores)
+        has_options = bool(options)
+        if not has_options:
+            options = [
                 discord.SelectOption(
-                    label=store_name,
-                    value=store['storeId'],
-                    description=f"{store_address} - ID: {store['storeId']}"
+                    label="No stores available",
+                    value="no_stores",
+                    description="Use the back button to try again."
                 )
-            )
-        
+            ]
         super().__init__(
             placeholder="Choose your preferred store...",
             min_values=1,
             max_values=1,
             options=options
         )
+
+        if not has_options:
+            self.disabled = True
     
     async def callback(self, interaction: discord.Interaction):
         """Handle store selection"""
         try:
             selected_store_id = self.values[0]
+            if selected_store_id == "no_stores":
+                await interaction.response.send_message(
+                    f"{ERROR} No stores available. Please try again later.",
+                    ephemeral=USE_EPHEMERAL_MESSAGES
+                )
+                return
             selected_store = self.bot.get_store_by_id(selected_store_id)
-            
+
             if selected_store:
                 await self._complete_setup(interaction, self.state, selected_store_id, selected_store)
             else:
@@ -288,35 +310,23 @@ class StoreSelect(discord.ui.Select):
         """Complete the setup process with specific store"""
         user_id = interaction.user.id
         username = interaction.user.display_name
-        
-        if self.bot.database.add_user(user_id, username):
-            if self.bot.database.update_user_store(user_id, state, store_id):
-                embed = discord.Embed(
-                    title=f"{SUCCESS} Setup Complete!",
-                    description="Your Officeworks store preferences have been saved.",
-                    color=SUCCESS_COLOR
-                )
-                
-                embed.add_field(name="State", value=STATE_NAMES.get(state, state), inline=True)
-                embed.add_field(name="Store", value=store_info['store'], inline=True)
-                embed.add_field(name="Address", value=f"{store_info['address']}, {store_info['suburb']} {store_info['postcode']}", inline=False)
-                embed.add_field(name="Phone", value=store_info['phone'], inline=True)
-                embed.add_field(name="Store ID", value=store_info['storeId'], inline=True)
-                embed.add_field(name="Completed", value=get_full_timestamp(datetime.now(timezone.utc)), inline=False)
-                
-                embed.set_footer(text="Use /add to start tracking products")
-                
-                await interaction.response.edit_message(content=None, embed=embed, view=None)
-            else:
-                await interaction.response.edit_message(
-                    content=f"{ERROR} Failed to save store preferences. Please try again.",
-                    view=None
-                )
-        else:
+
+        try:
+            embed = self.bot.complete_store_setup(
+                user_id,
+                username,
+                state,
+                store_info=store_info,
+                store_id=store_id
+            )
+        except StoreSetupError as exc:
             await interaction.response.edit_message(
-                content=f"{ERROR} Failed to create user profile. Please try again.",
+                content=f"{ERROR} {exc}",
                 view=None
             )
+            return
+
+        await interaction.response.edit_message(content=None, embed=embed, view=None)
 
 class StoreSearchSelect(discord.ui.Select):
     """Select menu for searching and selecting stores with autocomplete"""
@@ -328,32 +338,38 @@ class StoreSearchSelect(discord.ui.Select):
         # Get stores for this state
         stores = bot.get_stores_by_state(state)
         
-        # Create options for stores (limit to 25 for Discord)
-        options = []
-        for store in stores[:25]:
-            store_name = store['store']
-            store_address = f"{store['suburb']}, {store['postcode']}"
-            options.append(
+        options = _build_store_options(stores)
+        has_options = bool(options)
+        if not has_options:
+            options = [
                 discord.SelectOption(
-                    label=store_name,
-                    value=store['storeId'],
-                    description=f"{store_address} - ID: {store['storeId']}"
+                    label="No stores available",
+                    value="no_stores",
+                    description="Try refining your search."
                 )
-            )
-        
+            ]
         super().__init__(
             placeholder="Search and select a store...",
             min_values=1,
             max_values=1,
             options=options
         )
+
+        if not has_options:
+            self.disabled = True
     
     async def callback(self, interaction: discord.Interaction):
         """Handle store selection"""
         try:
             selected_store_id = self.values[0]
+            if selected_store_id == "no_stores":
+                await interaction.response.send_message(
+                    f"{ERROR} No stores available. Please try again later.",
+                    ephemeral=USE_EPHEMERAL_MESSAGES
+                )
+                return
             selected_store = self.bot.get_store_by_id(selected_store_id)
-            
+
             if selected_store:
                 await self._complete_setup(interaction, self.state, selected_store_id, selected_store)
             else:
@@ -373,35 +389,27 @@ class StoreSearchSelect(discord.ui.Select):
         """Complete the setup process with specific store"""
         user_id = interaction.user.id
         username = interaction.user.display_name
-        
-        if self.bot.database.add_user(user_id, username):
-            if self.bot.database.update_user_store(user_id, state, store_id):
-                embed = discord.Embed(
-                    title=f"{SUCCESS} Setup Complete!",
-                    description="Your Officeworks store preferences have been saved.",
-                    color=SUCCESS_COLOR
-                )
-                
-                embed.add_field(name="State", value=STATE_NAMES.get(state, state), inline=True)
-                embed.add_field(name="Store", value=store_info['store'], inline=True)
-                embed.add_field(name="Address", value=f"{store_info['address']}, {store_info['suburb']} {store_info['postcode']}", inline=False)
-                embed.add_field(name="Phone", value=store_info['phone'], inline=True)
-                embed.add_field(name="Store ID", value=store_info['storeId'], inline=True)
-                embed.add_field(name="Completed", value=get_full_timestamp(datetime.now(timezone.utc)), inline=False)
-                
-                embed.set_footer(text="Use /add to start tracking products")
-                
-                await interaction.response.edit_message(content=None, embed=embed, ephemeral=USE_EPHEMERAL_MESSAGES)
-            else:
-                await interaction.response.edit_message(
-                    content=f"{ERROR} Failed to save store preferences. Please try again.",
-                    view=None
-                )
-        else:
+
+        try:
+            embed = self.bot.complete_store_setup(
+                user_id,
+                username,
+                state,
+                store_info=store_info,
+                store_id=store_id
+            )
+        except StoreSetupError as exc:
             await interaction.response.edit_message(
-                content=f"{ERROR} Failed to create user profile. Please try again.",
+                content=f"{ERROR} {exc}",
                 view=None
             )
+            return
+
+        await interaction.response.edit_message(
+            content=None,
+            embed=embed,
+            ephemeral=USE_EPHEMERAL_MESSAGES
+        )
 
 class StoreSearchButton(discord.ui.Button):
     """Button to search for stores"""
@@ -451,11 +459,13 @@ class StoreSearchModal(discord.ui.Modal, title="Search for a Store"):
             stores = self.bot.get_stores_by_state(self.state)
             
             # Search by store name or ID
-            matching_stores = []
-            for store in stores:
-                if (query.lower() in store['store'].lower() or 
-                    query.upper() in store['storeId'].upper()):
-                    matching_stores.append(store)
+            matching_stores = [
+                store for store in stores
+                if (
+                    query.lower() in store.get('store', '').lower()
+                    or query.upper() in store.get('storeId', '').upper()
+                )
+            ]
             
             if not matching_stores:
                 await interaction.response.send_message(
@@ -491,35 +501,26 @@ class StoreSearchModal(discord.ui.Modal, title="Search for a Store"):
         """Complete the setup process with specific store"""
         user_id = interaction.user.id
         username = interaction.user.display_name
-        
-        if self.bot.database.add_user(user_id, username):
-            if self.bot.database.update_user_store(user_id, state, store_id):
-                embed = discord.Embed(
-                    title=f"{SUCCESS} Setup Complete!",
-                    description="Your Officeworks store preferences have been saved.",
-                    color=SUCCESS_COLOR
-                )
-                
-                embed.add_field(name="State", value=STATE_NAMES.get(state, state), inline=True)
-                embed.add_field(name="Store", value=store_info['store'], inline=True)
-                embed.add_field(name="Address", value=f"{store_info['address']}, {store_info['suburb']} {store_info['postcode']}", inline=False)
-                embed.add_field(name="Phone", value=store_info['phone'], inline=True)
-                embed.add_field(name="Store ID", value=store_info['storeId'], inline=True)
-                embed.add_field(name="Completed", value=get_full_timestamp(datetime.now(timezone.utc)), inline=False)
-                
-                embed.set_footer(text="Use /add to start tracking products")
-                
-                await interaction.response.send_message(embed=embed, ephemeral=USE_EPHEMERAL_MESSAGES)
-            else:
-                await interaction.response.send_message(
-                    f"{ERROR} Failed to save store preferences. Please try again.",
-                    ephemeral=USE_EPHEMERAL_MESSAGES
-                )
-        else:
+
+        try:
+            embed = self.bot.complete_store_setup(
+                user_id,
+                username,
+                state,
+                store_info=store_info,
+                store_id=store_id
+            )
+        except StoreSetupError as exc:
             await interaction.response.send_message(
-                f"{ERROR} Failed to create user profile. Please try again.",
+                f"{ERROR} {exc}",
                 ephemeral=USE_EPHEMERAL_MESSAGES
             )
+            return
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=USE_EPHEMERAL_MESSAGES
+        )
 
 class StoreSearchResultsView(discord.ui.View):
     """View for displaying store search results"""
@@ -744,7 +745,7 @@ class OfficeworksBot(commands.Bot):
         
         # Shutdown flag
         self._shutdown_requested = False
-    
+
     def _load_stores_data(self):
         """Load stores data from the allstores.md file"""
         try:
@@ -756,7 +757,60 @@ class OfficeworksBot(commands.Bot):
         except Exception as e:
             print(f"Warning: Could not load stores data: {e}")
             return {"states": [], "stores": []}
-    
+
+    def complete_store_setup(self, user_id: int, username: str, state: str,
+                              *, store_info: Optional[dict] = None,
+                              store_id: Optional[str] = None) -> discord.Embed:
+        """Persist the user's store preferences and return a confirmation embed."""
+
+        resolved_store_id = store_id or (store_info.get('storeId') if store_info else None)
+
+        if not self.database.add_user(user_id, username):
+            raise StoreSetupError("Failed to create user profile. Please try again.")
+
+        if not self.database.update_user_store(user_id, state, resolved_store_id):
+            raise StoreSetupError("Failed to save store preferences. Please try again.")
+
+        return self.create_store_embed(state, store_info)
+
+    def create_store_embed(self, state: str, store_info: Optional[dict]) -> discord.Embed:
+        """Generate the confirmation embed for store setup completion."""
+
+        embed = discord.Embed(
+            title=f"{SUCCESS} Setup Complete!",
+            description="Your Officeworks store preferences have been saved.",
+            color=SUCCESS_COLOR
+        )
+
+        embed.add_field(name="State", value=STATE_NAMES.get(state, state), inline=True)
+
+        if store_info:
+            embed.add_field(name="Store", value=store_info.get('store', 'Unknown Store'), inline=True)
+
+            location_parts = [store_info.get('address', 'N/A')]
+            suburb = store_info.get('suburb')
+            postcode = store_info.get('postcode')
+            suburb_postcode = " ".join(part for part in (suburb, postcode) if part)
+            if suburb_postcode:
+                location_parts.append(suburb_postcode)
+            address_line = ", ".join(part for part in location_parts if part)
+            embed.add_field(name="Address", value=address_line, inline=False)
+
+            embed.add_field(name="Phone", value=store_info.get('phone', 'N/A'), inline=True)
+            embed.add_field(name="Store ID", value=store_info.get('storeId', 'N/A'), inline=True)
+        else:
+            state_name = STATE_NAMES.get(state, state)
+            embed.add_field(name="Store", value=f"Any store in {state_name}", inline=True)
+            embed.add_field(name="Status", value="Ready to track products!", inline=False)
+
+        embed.add_field(
+            name="Completed",
+            value=get_full_timestamp(datetime.now(timezone.utc)),
+            inline=False
+        )
+        embed.set_footer(text="Use /add to start tracking products")
+        return embed
+
     def get_stores_by_state(self, state: str):
         """Get all stores for a specific state"""
         if not self.stores_data or "stores" not in self.stores_data:
