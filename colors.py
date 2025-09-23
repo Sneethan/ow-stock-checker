@@ -2,17 +2,19 @@
 # These colors match the Officeworks brand guidelines
 
 # Primary Brand Colors
-OFFICEWORKS_BLUE = 0x0066CC      # Primary brand blue
-OFFICEWORKS_RED = 0xE31837       # Primary brand red
-OFFICEWORKS_DARK_BLUE = 0x003366 # Secondary brand blue
+# Softened values to provide a more balanced palette across embeds
+OFFICEWORKS_BLUE = 0x0059B8      # Refined primary brand blue
+OFFICEWORKS_RED = 0xDA2C43       # Refined secondary accent red
+OFFICEWORKS_DARK_BLUE = 0x003F7A # Secondary brand blue for depth
 
 # Supporting Colors
-LIGHT_BLUE = 0xE6F3FF           # Light blue for backgrounds
-MEDIUM_BLUE = 0x3399FF          # Medium blue for highlights
-DARK_RED = 0xB31412             # Dark red for errors
-SUCCESS_GREEN = 0x28A745        # Success green
-WARNING_ORANGE = 0xFF8C00       # Warning orange
-INFO_BLUE = 0x0099FF            # Info blue
+# Calibrated to ensure harmonious saturation and value across semantic uses
+LIGHT_BLUE = 0xE9F2FB           # Light blue for backgrounds
+MEDIUM_BLUE = 0x2F86E5          # Medium blue for highlights
+DARK_RED = 0xBB2A35             # Muted red for errors
+SUCCESS_GREEN = 0x2AA876        # Calmer success green with teal undertone
+WARNING_ORANGE = 0xF2A341       # Softer warning orange
+INFO_BLUE = 0x3C8DDE            # Harmonised info blue
 
 # Semantic Colors
 SUCCESS_COLOR = SUCCESS_GREEN    # For successful operations
